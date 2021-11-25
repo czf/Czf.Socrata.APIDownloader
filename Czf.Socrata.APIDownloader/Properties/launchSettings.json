@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Czf.Socrata.APIDownloader": {
+      "commandName": "Project",
+        "environmentVariables": {
+            "ASPNETCORE_ENVIRONMENT": "Development"
+        }
+    }
+  }
+}
