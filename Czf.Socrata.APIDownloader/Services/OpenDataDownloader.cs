@@ -1,4 +1,6 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using Czf.Socrata.APIDownloader.Observables;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System;
 using System.Collections.Generic;
@@ -16,17 +18,23 @@ namespace Czf.Socrata.APIDownloader.Services;
 public class OpenDataDownloader : BackgroundService
 {
     private readonly IHostApplicationLifetime _applicationLifetime;
+    private readonly ILogger<OpenDataDownloader> _logger;
     private readonly IOptions<OpenDataDownloaderOptions> _options;
     private readonly HttpClient _httpClient;
+    private readonly MoveFilesToDestinationContextObservable _moveFilesToDestinationContextObservable;
 
     public OpenDataDownloader(
         IHostApplicationLifetime applicationLifetime,
+        ILogger<OpenDataDownloader> logger,
         IOptions<OpenDataDownloaderOptions> options,
-        HttpClient httpClient)
+        HttpClient httpClient,
+        MoveFilesToDestinationContextObservable moveFilesToDestinationContextObservable)
     {
         _applicationLifetime = applicationLifetime;
+        _logger = logger;
         _options = options;
         _httpClient = httpClient;
+        _moveFilesToDestinationContextObservable = moveFilesToDestinationContextObservable;
     }
 
 
@@ -40,27 +48,41 @@ public class OpenDataDownloader : BackgroundService
         string tempBaseFileName = Path.GetTempFileName();
         File.Delete(tempBaseFileName);
         long bytesWritten = 0;
+        string appToken = options.SocrataAppToken; 
+        if (String.IsNullOrEmpty(options.SocrataAppToken) || string.IsNullOrWhiteSpace(options.SocrataAppToken))
+        {
+            _logger.LogWarning("Application token not provided.  API throttling limits are higher when using an application token. https://dev.socrata.com/docs/app-tokens.html");
+        }
+        else
+        {
+            appToken = options.SocrataAppToken;
+        }
 
-
-        
-        FileStream dataFile = await FileStart(fileCount, tempBaseFileName, stoppingToken);
+            FileStream dataFile = await FileStart(fileCount, tempBaseFileName, stoppingToken);
         try
         {
             do
             {
                 fileCreated = false;
                 string paginatedQuery = options.DataUri.Query + (options.DataUri.Query.Length > 0 ? "&" : "?") + GetOffset(fileCount, pageCount, options.QueryPagesPerFile, queryLimitPerPage);
-                Uri paginatedUri = new Uri(options.DataUri.GetLeftPart(UriPartial.Path) + paginatedQuery);
+                Uri paginatedUri = new(options.DataUri.GetLeftPart(UriPartial.Path) + paginatedQuery);
                 using HttpRequestMessage httpRequestMessage = new(
                             HttpMethod.Get,
                             paginatedUri);
 
-                httpRequestMessage.Headers.Add("X-App-Token", options.AppToken);
+                if (!string.IsNullOrEmpty(appToken))
+                {
+                    httpRequestMessage.Headers.Add("X-App-Token", options.SocrataAppToken);
+                }
+                
                 HttpResponseMessage httpResponseMessage =
                     await _httpClient.SendAsync(httpRequestMessage, stoppingToken);
                 if (!httpResponseMessage.IsSuccessStatusCode)
                 {
-                    Console.Error.WriteLine("unsuccessful response with uri: " + paginatedUri.ToString());
+                    _logger.LogError("unsuccessful response with uri: " + paginatedUri.ToString());
+                    _logger.LogError($"{httpResponseMessage.StatusCode}");
+                    _logger.LogError($"{httpResponseMessage.ReasonPhrase}");                    
+
                     break;
                 }
 
@@ -74,6 +96,7 @@ public class OpenDataDownloader : BackgroundService
                 pageCount++;
                 if (pageCount >= options.QueryPagesPerFile)
                 {
+                    Console.WriteLine($"Completed {fileCount+1} file(s) with {options.QueryPagesPerFile} pages per file");
                     await FileEnd(dataFile, stoppingToken);
 
                     pageCount = 0;
@@ -87,15 +110,25 @@ public class OpenDataDownloader : BackgroundService
 
 
             } while ((bytesWritten > 3) && !stoppingToken.IsCancellationRequested);
-            if (bytesWritten == 3 && fileCreated)
+            if (bytesWritten <= 3 && fileCreated)
             {
                 File.Delete(GenerateTempFileName(fileCount, tempBaseFileName));
+                Console.WriteLine($"Completed a total of {fileCount+1} files");
             }
             else
             {
                 dataFile.Seek(-1, SeekOrigin.Current);
                 await FileEnd(dataFile, stoppingToken);
+                Console.WriteLine($"Completed a total of {fileCount + 1} files");
             }
+            string filename = Path.GetFileName(tempBaseFileName);
+            string path = tempBaseFileName.Replace(filename, string.Empty);
+            _moveFilesToDestinationContextObservable
+                .MoveFilesToDestinationFromPattern(path, filename.Replace(".tmp", "_*_*.json"));
+        }
+        catch(Exception ex)
+        {
+            _logger.LogError(ex, "Error from Data Downloader");
         }
         finally
         {
@@ -103,7 +136,7 @@ public class OpenDataDownloader : BackgroundService
             {
                 await dataFile.DisposeAsync();
             }
-            _applicationLifetime.StopApplication();
+            await _moveFilesToDestinationContextObservable.MarkComplete();
         }
     }
 
@@ -125,7 +158,7 @@ public class OpenDataDownloader : BackgroundService
 
     private static string GenerateTempFileName(int fileCount, string tempBaseFileName)
     {
-        return tempBaseFileName.Replace(".tmp", "_" + DateTime.Now.ToBinary() + "_" + fileCount + ".tmp");
+        return tempBaseFileName.Replace(".tmp", "_" + DateTime.Now.ToBinary() + "_" + fileCount + ".json");
     }
 
     private static int GetQueryLimitPerPage(Uri dataUri)
@@ -153,10 +186,8 @@ public class OpenDataDownloader : BackgroundService
 
     public class OpenDataDownloaderOptions
     {
-        public const string CONFIG_KEY_APP_TOKEN = "socrataAppToken";
-
         public Uri DataUri { get; set; }
-        public string AppToken { get; set; }
+        public string SocrataAppToken { get; set; }
         public int QueryPagesPerFile { get; set; } = 10;
     }
 }
