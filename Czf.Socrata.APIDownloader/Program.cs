@@ -10,10 +10,14 @@ using System.Threading.Tasks;
 using System.Web;
 using Czf.Socrata.APIDownloader.Services;
 using OpenDataDownloaderOptions = Czf.Socrata.APIDownloader.Services.OpenDataDownloader.OpenDataDownloaderOptions;
+using MoveFilesToDestinationOptions = Czf.Socrata.APIDownloader.Services.MoveFilesToDestination.MoveFilesToDestinationOptions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Czf.Socrata.APIDownloader.Observables;
+using Czf.Socrata.APIDownloader.Domain;
 
 namespace SocrataAPIDownloader;
 
@@ -22,19 +26,33 @@ class Program
     static async Task Main(string[] args)
     {
         await CreateHostBuilder(args)
+            .ConfigureLogging((context, builder) =>
+            {
+                builder
+                .ClearProviders()
+                .AddConsole()
+                .SetMinimumLevel(LogLevel.Warning)
+                .AddConfiguration(context.Configuration);
+                
+            })
             .ConfigureServices((hostContext, services) =>
             {
                 var config = hostContext.Configuration;
 
-                services
+                _ = services
                 .AddOptions()
-                .Configure<OpenDataDownloaderOptions>(x=> 
+                .Configure<OpenDataDownloaderOptions>(config)
+                .Configure<MoveFilesToDestinationOptions>(config)
+
+                .AddHostedService<OpenDataDownloader>()
+                .AddHostedService<MoveFilesToDestination>()
+                .AddSingleton<MoveFilesToDestinationContextObservable>()
+                .AddSingleton<IObservable<MoveFilesToDestinationContext>, MoveFilesToDestinationContextObservable>(x =>
                 {
-                    x.AppToken = config.GetValue<string>(OpenDataDownloaderOptions.CONFIG_KEY_APP_TOKEN);
-                    x.DataUri = new Uri(config.GetValue<string>(nameof(OpenDataDownloaderOptions.DataUri)));
+                    return x.GetService<MoveFilesToDestinationContextObservable>();
                 })
-                .AddHttpClient()
-                .AddHostedService<OpenDataDownloader>();
+                .AddHttpClient(string.Empty, (x) => { x.Timeout = Timeout.InfiniteTimeSpan; });
+                
             })
             .RunConsoleAsync();
     }
