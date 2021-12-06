@@ -18,6 +18,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Czf.Socrata.APIDownloader.Observables;
 using Czf.Socrata.APIDownloader.Domain;
+using static Czf.Socrata.APIDownloader.Observables.SQLImportObservable;
 
 namespace SocrataAPIDownloader;
 
@@ -43,13 +44,21 @@ class Program
                 .AddOptions()
                 .Configure<OpenDataDownloaderOptions>(config)
                 .Configure<MoveFilesToDestinationOptions>(config)
+                .Configure<ImportJsonFromFileContextOptions>(config)
 
                 .AddHostedService<OpenDataDownloader>()
                 .AddHostedService<MoveFilesToDestination>()
+                .AddHostedService<JsonFileToSqlImporter>()
+
                 .AddSingleton<MoveFilesToDestinationContextObservable>()
                 .AddSingleton<IObservable<MoveFilesToDestinationContext>, MoveFilesToDestinationContextObservable>(x =>
                 {
                     return x.GetService<MoveFilesToDestinationContextObservable>();
+                })
+                .AddSingleton<SQLImportObservable>()
+                .AddSingleton<IObservable<ImportJsonFromFileContext>, SQLImportObservable>(x =>
+                {
+                    return x.GetService<SQLImportObservable>();
                 })
                 .AddHttpClient(string.Empty, (x) => { x.Timeout = Timeout.InfiniteTimeSpan; });
                 
