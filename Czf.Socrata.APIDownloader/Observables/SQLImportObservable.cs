@@ -107,13 +107,14 @@ public class SQLImportObservable : IObservable<ImportJsonFromFileContext>, IDisp
         while (_keepRunning)
         {
             _importEvent.WaitOne();
-            if(_contextQueue.TryDequeue(out var context))
+            if(_contextQueue.TryPeek(out var context))
             {
                 foreach(var observer in _observers)
                 {
                     Console.WriteLine("import");
                     observer.OnNext(context);
                 }
+                _contextQueue.TryDequeue(out _);
             }
         }
     }
