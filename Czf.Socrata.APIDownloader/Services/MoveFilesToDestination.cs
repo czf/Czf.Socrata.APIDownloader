@@ -89,7 +89,7 @@ public class MoveFilesToDestination : IHostedService, IDisposable
             _completeSemaphore.Release();
             _logger.LogInformation("Completed: Move Files");
             Console.WriteLine("Completed");
-            _sqlImportObservable.MarkComplete().RunSynchronously();
+            _sqlImportObservable.MarkComplete().Wait();
             if (!_options.ImportToDatabaseEnabled)
             {
                 _applicationLifetime.StopApplication();

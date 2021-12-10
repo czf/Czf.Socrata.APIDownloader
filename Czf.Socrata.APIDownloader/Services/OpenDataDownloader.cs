@@ -44,11 +44,12 @@ public class OpenDataDownloader : BackgroundService
         int queryLimitPerPage = GetQueryLimitPerPage(options.DataUri);
         int fileCount = 0;
         int pageCount = 0;
-        bool fileCreated;
+        bool createFile =false;
         string tempBaseFileName = Path.GetTempFileName();
         File.Delete(tempBaseFileName);
         long bytesWritten = 0;
-        string appToken = options.SocrataAppToken; 
+        string appToken = options.SocrataAppToken;
+        string fileName;
         if (String.IsNullOrEmpty(options.SocrataAppToken) || string.IsNullOrWhiteSpace(options.SocrataAppToken))
         {
             _logger.LogWarning("Application token not provided.  API throttling limits are higher when using an application token. https://dev.socrata.com/docs/app-tokens.html");
@@ -58,12 +59,16 @@ public class OpenDataDownloader : BackgroundService
             appToken = options.SocrataAppToken;
         }
 
-            FileStream dataFile = await FileStart(fileCount, tempBaseFileName, stoppingToken);
+        FileStream dataFile;
+        (dataFile, fileName) = await FileStart(fileCount, tempBaseFileName, stoppingToken);
         try
         {
             do
             {
-                fileCreated = false;
+                if (createFile)
+                {
+                    (dataFile, fileName) = await FileStart(fileCount, tempBaseFileName, stoppingToken);
+                }
                 string paginatedQuery = options.DataUri.Query + (options.DataUri.Query.Length > 0 ? "&" : "?") + GetOffset(fileCount, pageCount, options.QueryPagesPerFile, queryLimitPerPage);
                 Uri paginatedUri = new(options.DataUri.GetLeftPart(UriPartial.Path) + paginatedQuery);
                 using HttpRequestMessage httpRequestMessage = new(
@@ -90,36 +95,42 @@ public class OpenDataDownloader : BackgroundService
                 if (contentStream.Length > 3)
                 {
                     await contentStream.CopyToAsync(dataFile, stoppingToken);
-                    await dataFile.WriteAsync(new byte[] { (byte)',' }, stoppingToken);
+                    
                 }
                 bytesWritten = contentStream.Length;
                 pageCount++;
                 if (pageCount >= options.QueryPagesPerFile)
                 {
-                    Console.WriteLine($"Completed {fileCount+1} file(s) with {options.QueryPagesPerFile} pages per file");
+                    Console.WriteLine($"Downloaded file number {fileCount+1} with {options.QueryPagesPerFile} pages per file");
                     await FileEnd(dataFile, stoppingToken);
 
                     pageCount = 0;
-                    fileCreated = true;
+                    createFile = true;
                     
                     
                     fileCount++;
-                    dataFile = await FileStart(fileCount, tempBaseFileName, stoppingToken);
+
+                    
+                }
+                else
+                { 
+                    createFile = false; 
+                    await dataFile.WriteAsync(new byte[] { (byte)',' }, stoppingToken); 
                 }
 
 
 
             } while ((bytesWritten > 3) && !stoppingToken.IsCancellationRequested);
-            if (bytesWritten <= 3 && fileCreated)
+            if (bytesWritten <= 3 && createFile)
             {
-                File.Delete(GenerateTempFileName(fileCount, tempBaseFileName));
-                Console.WriteLine($"Completed a total of {fileCount+1} files");
+                File.Delete(fileName);
+                Console.WriteLine($"Completed a total of {fileCount-1} files with content");
             }
             else
             {
                 dataFile.Seek(-1, SeekOrigin.Current);
                 await FileEnd(dataFile, stoppingToken);
-                Console.WriteLine($"Completed a total of {fileCount + 1} files");
+                Console.WriteLine($"Completed a total of {fileCount + 1} files with content");
             }
             string filename = Path.GetFileName(tempBaseFileName);
             string path = tempBaseFileName.Replace(filename, string.Empty);
@@ -140,11 +151,12 @@ public class OpenDataDownloader : BackgroundService
         }
     }
 
-    private static async ValueTask<FileStream> FileStart(int fileCount, string tempBaseFileName, CancellationToken cancellationToken)
+    private static async ValueTask<FileStartRecord> FileStart(int fileCount, string tempBaseFileName, CancellationToken cancellationToken)
     {
-        FileStream dataFile = File.Create(GenerateTempFileName(fileCount, tempBaseFileName));
+        string fileName = GenerateTempFileName(fileCount, tempBaseFileName);
+        FileStream dataFile = File.Create(fileName);
         await dataFile.WriteAsync(new byte[] { (byte)'[' }, cancellationToken);
-        return dataFile;
+        return new FileStartRecord(dataFile, fileName);
     }
 
     private static async ValueTask FileEnd(FileStream dataFile, CancellationToken cancellationToken)
@@ -183,6 +195,7 @@ public class OpenDataDownloader : BackgroundService
         return $"$offset={offset}";
     }
 
+    private record class FileStartRecord(FileStream DataFile, string FileName);
 
     public class OpenDataDownloaderOptions
     {
