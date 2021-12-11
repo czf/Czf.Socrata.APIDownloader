@@ -15,7 +15,7 @@ public class SQLImportObservable : IObservable<ImportJsonFromFileContext>, IDisp
 {
     private bool disposedValue;
     private readonly List<IObserver<ImportJsonFromFileContext>> _observers;
-    private readonly AutoResetEvent _importEvent;
+    private readonly SemaphoreSlim _importEvent;
     bool _keepRunning;
     private readonly ConcurrentQueue<ImportJsonFromFileContext> _contextQueue;
     private readonly SemaphoreSlim _completeSemaphore;
@@ -24,7 +24,7 @@ public class SQLImportObservable : IObservable<ImportJsonFromFileContext>, IDisp
 
     public SQLImportObservable(IHostApplicationLifetime hostApplicationLifetime)
     {
-        _importEvent = new AutoResetEvent(false);
+        _importEvent = new SemaphoreSlim(0);
         _completeSemaphore = new SemaphoreSlim(0, 1);
         _observers = new List<IObserver<ImportJsonFromFileContext>>();
         _keepRunning = true;
@@ -55,7 +55,7 @@ public class SQLImportObservable : IObservable<ImportJsonFromFileContext>, IDisp
             throw new InvalidOperationException("Observable is completed");
         }
         _contextQueue.Enqueue(new ImportJsonFromFileContext(jsonFile));
-        _importEvent.Set();
+        _importEvent.Release();
     }
 
 
@@ -106,26 +106,24 @@ public class SQLImportObservable : IObservable<ImportJsonFromFileContext>, IDisp
     {
         while (_keepRunning)
         {
-            _importEvent.WaitOne();
-            if(_contextQueue.TryPeek(out var context))
+            _importEvent.Wait();
+            while (!_contextQueue.IsEmpty)
             {
-                foreach(var observer in _observers)
+                if (_contextQueue.TryPeek(out var context))
                 {
-                    Console.WriteLine("import");
-                    observer.OnNext(context);
+                    
+                    foreach (var observer in _observers)
+                    {
+                        Console.WriteLine("import");
+                        observer.OnNext(context);
+                    }
+                    _contextQueue.TryDequeue(out _);
                 }
-                _contextQueue.TryDequeue(out _);
             }
         }
     }
 
-    public class ImportJsonFromFileContextOptions
-    {
-        public string ConnectionString { get; set; } = "Server=.;Database=OpenData;Trusted_Connection=True;";
-        public string StoredProcedureProcessJson { get; set; } = "usp_ProcessJson";
-        public bool ImportToDatabaseEnabled { get; set; } = true;
-        
-    }
+    
 
     
 }

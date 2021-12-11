@@ -51,7 +51,6 @@ public class JsonFileToSqlImporter : IHostedService, IDisposable
         private readonly IHostApplicationLifetime _applicationLifetime;
         private readonly ImportJsonFromFileContextOptions _options;
         private readonly ILogger _logger;
-        private readonly string _extension;
         private readonly SemaphoreSlim _completeSemaphore;
 
 
@@ -72,7 +71,7 @@ public class JsonFileToSqlImporter : IHostedService, IDisposable
             _completeSemaphore.Wait();
             _completeSemaphore.Release();
             _logger.LogInformation("Completed: Import Json");
-            Console.WriteLine("Completed");
+            Console.WriteLine("Completed: Import Json");
             _applicationLifetime.StopApplication();
 
         }
@@ -84,19 +83,27 @@ public class JsonFileToSqlImporter : IHostedService, IDisposable
 
         public void OnNext(ImportJsonFromFileContext value)
         {
-            _completeSemaphore.Wait();
-            Console.WriteLine("Import file");
-            using SqlConnection sqlConnection = new SqlConnection(_options.ConnectionString);
-            sqlConnection.Open();
-            using SqlCommand sqlCommand = sqlConnection.CreateCommand();
-            sqlCommand.CommandText = _options.StoredProcedureProcessJson;
-            sqlCommand.CommandType = System.Data.CommandType.StoredProcedure;
-            SqlParameter sqlParameter = new SqlParameter("FilePath", System.Data.SqlDbType.VarChar);
-            sqlParameter.Value = value.filePath;
-            sqlCommand.Parameters.Add(sqlParameter);
-            sqlCommand.CommandTimeout = 0;
-            sqlCommand.ExecuteNonQueryAsync(_applicationLifetime.ApplicationStopped).Wait();
-            _completeSemaphore.Release();
+            try
+            {
+                if (!_options.ImportToDatabaseEnabled) { return; }
+                _completeSemaphore.Wait();
+                Console.WriteLine("Import file");
+                using SqlConnection sqlConnection = new SqlConnection(_options.ConnectionString);
+                sqlConnection.Open();
+                using SqlCommand sqlCommand = sqlConnection.CreateCommand();
+                sqlCommand.CommandText = _options.StoredProcedureProcessJson;
+                sqlCommand.CommandType = System.Data.CommandType.StoredProcedure;
+                SqlParameter sqlParameter = new SqlParameter("FilePath", System.Data.SqlDbType.VarChar);
+                sqlParameter.Value = value.filePath;
+                sqlCommand.Parameters.Add(sqlParameter);
+                sqlCommand.CommandTimeout = 0;
+                sqlCommand.ExecuteNonQueryAsync(_applicationLifetime.ApplicationStopped).Wait();
+                _completeSemaphore.Release();
+            }
+            catch(Exception ex)
+            {
+                _logger.LogError(ex, "error import json to sql");
+            }
         }
     }
 
@@ -106,7 +113,7 @@ public class JsonFileToSqlImporter : IHostedService, IDisposable
         {
             if (disposing)
             {
-                _subscription.Dispose();
+                _subscription?.Dispose();
             }            
             disposedValue = true;
         }
@@ -117,5 +124,13 @@ public class JsonFileToSqlImporter : IHostedService, IDisposable
         // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
         Dispose(disposing: true);
         GC.SuppressFinalize(this);
+    }
+
+    public class ImportJsonFromFileContextOptions
+    {
+        public string ConnectionString { get; set; } = "Server=.;Database=OpenData;Trusted_Connection=True;";
+        public string StoredProcedureProcessJson { get; set; } = "usp_ProcessJson";
+        public bool ImportToDatabaseEnabled { get; set; } = true;
+
     }
 }

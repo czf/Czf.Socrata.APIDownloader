@@ -58,6 +58,7 @@ public class MoveFilesToDestination : IHostedService, IDisposable
         public string FileTargetDestination { get; set; } = ".";
         public string FileTargetBaseName { get; set; } = "result.json";
         public bool ImportToDatabaseEnabled { get; set; } = true;
+        public bool SkipDownload { get; set; } = false;
 
     }
 
@@ -88,7 +89,17 @@ public class MoveFilesToDestination : IHostedService, IDisposable
             _completeSemaphore.Wait();
             _completeSemaphore.Release();
             _logger.LogInformation("Completed: Move Files");
-            Console.WriteLine("Completed");
+            Console.WriteLine("Completed: Move Files");
+            
+            if (_options.SkipDownload)
+            {
+                string fileNamePattern = _options.FileTargetBaseName.Replace(_extension, $"*{_extension}");
+                var files = Directory.EnumerateFiles(_options.FileTargetDestination, fileNamePattern);
+                foreach (var file in files)
+                {
+                    _sqlImportObservable.ImportSqlFromJson(file);
+                }
+            }
             _sqlImportObservable.MarkComplete().Wait();
             if (!_options.ImportToDatabaseEnabled)
             {
@@ -115,7 +126,6 @@ public class MoveFilesToDestination : IHostedService, IDisposable
             {
                 try
                 {
-                    Thread.Sleep(1000);
                     int leadingZeros = maxLeadingZeros - Math.Max((int)(Math.Log10(currentIndex)),0);
                     var fileName = _options.FileTargetBaseName.Replace(_extension, $"_{"".PadLeft(leadingZeros, '0')}{currentIndex}{_extension}");
                     File.Move(file, _options.FileTargetDestination + fileName);
@@ -139,7 +149,7 @@ public class MoveFilesToDestination : IHostedService, IDisposable
         {
             if (disposing)
             {
-                _subscription.Dispose();
+                _subscription?.Dispose();
             }
             disposedValue = true;
         }

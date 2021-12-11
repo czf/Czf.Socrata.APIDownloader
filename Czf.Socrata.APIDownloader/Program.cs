@@ -18,7 +18,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Czf.Socrata.APIDownloader.Observables;
 using Czf.Socrata.APIDownloader.Domain;
-using static Czf.Socrata.APIDownloader.Observables.SQLImportObservable;
+using static Czf.Socrata.APIDownloader.Services.JsonFileToSqlImporter;
 
 namespace SocrataAPIDownloader;
 
