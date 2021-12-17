@@ -1,4 +1,5 @@
 ﻿using Czf.Socrata.APIDownloader.Domain;
+using Czf.Socrata.APIDownloader.Observables;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -14,6 +15,7 @@ namespace Czf.Socrata.APIDownloader.Services;
 public class MoveFilesToDestination : IHostedService, IDisposable
 {
     private readonly IObservable<MoveFilesToDestinationContext> _observable;
+    private readonly SQLImportObservable _sqlImportObservable;
     private readonly IHostApplicationLifetime _applicationLifetime;
     private readonly IOptions<MoveFilesToDestinationOptions> _options;
     private readonly ILogger<MoveFilesToDestination> _logger;
@@ -24,7 +26,8 @@ public class MoveFilesToDestination : IHostedService, IDisposable
         IHostApplicationLifetime applicationLifetime,
         IOptions<MoveFilesToDestinationOptions> options,
         IObservable<MoveFilesToDestinationContext> observable,
-        ILogger<MoveFilesToDestination> logger)
+        ILogger<MoveFilesToDestination> logger,
+        SQLImportObservable sqlImportObservable)
     {
         _applicationLifetime = applicationLifetime;
         _options = options;
@@ -33,14 +36,14 @@ public class MoveFilesToDestination : IHostedService, IDisposable
         }
 
         _observable = observable;
-        
+        _sqlImportObservable = sqlImportObservable;
         _logger = logger;
         
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _subscription = _observable.Subscribe(new ContextObserver(_options.Value, _logger, _applicationLifetime));
+        _subscription = _observable.Subscribe(new ContextObserver(_options.Value, _logger, _applicationLifetime, _sqlImportObservable));
         return Task.CompletedTask;
     }
 
@@ -54,6 +57,9 @@ public class MoveFilesToDestination : IHostedService, IDisposable
     {
         public string FileTargetDestination { get; set; } = ".";
         public string FileTargetBaseName { get; set; } = "result.json";
+        public bool ImportToDatabaseEnabled { get; set; } = true;
+        public bool SkipDownload { get; set; } = false;
+
     }
 
     private class ContextObserver : IObserver<MoveFilesToDestinationContext>
@@ -63,23 +69,42 @@ public class MoveFilesToDestination : IHostedService, IDisposable
         private readonly ILogger _logger;
         private readonly string _extension;
         private readonly SemaphoreSlim _completeSemaphore;
-
-        public ContextObserver(MoveFilesToDestinationOptions options, ILogger logger, IHostApplicationLifetime applicationLifetime)
+        private readonly SQLImportObservable _sqlImportObservable;
+        public ContextObserver(
+            MoveFilesToDestinationOptions options, 
+            ILogger logger, 
+            IHostApplicationLifetime applicationLifetime,
+            SQLImportObservable sqlImportObservable)
         {
             _applicationLifetime = applicationLifetime;
             _options = options;
             _logger = logger;
             _extension = Path.GetExtension(_options.FileTargetBaseName);
             _completeSemaphore = new(1);
+            _sqlImportObservable = sqlImportObservable;
         }
 
         public void OnCompleted()
         {
             _completeSemaphore.Wait();
             _completeSemaphore.Release();
-            _logger.LogInformation("Completed");
-            Console.WriteLine("Completed");
-            _applicationLifetime.StopApplication();
+            _logger.LogInformation("Completed: Move Files");
+            Console.WriteLine("Completed: Move Files");
+            
+            if (_options.SkipDownload)
+            {
+                string fileNamePattern = _options.FileTargetBaseName.Replace(_extension, $"*{_extension}");
+                var files = Directory.EnumerateFiles(_options.FileTargetDestination, fileNamePattern);
+                foreach (var file in files)
+                {
+                    _sqlImportObservable.ImportSqlFromJson(file);
+                }
+            }
+            _sqlImportObservable.MarkComplete().Wait();
+            if (!_options.ImportToDatabaseEnabled)
+            {
+                _applicationLifetime.StopApplication();
+            }
         }
 
         public void OnError(Exception error)
@@ -101,11 +126,12 @@ public class MoveFilesToDestination : IHostedService, IDisposable
             {
                 try
                 {
-                    Thread.Sleep(1000);
                     int leadingZeros = maxLeadingZeros - Math.Max((int)(Math.Log10(currentIndex)),0);
                     var fileName = _options.FileTargetBaseName.Replace(_extension, $"_{"".PadLeft(leadingZeros, '0')}{currentIndex}{_extension}");
                     File.Move(file, _options.FileTargetDestination + fileName);
                     _logger.LogInformation("moved");
+                    _sqlImportObservable.ImportSqlFromJson(_options.FileTargetDestination + fileName);
+                    
                 }
                 catch (Exception ex)
                 {
@@ -123,7 +149,7 @@ public class MoveFilesToDestination : IHostedService, IDisposable
         {
             if (disposing)
             {
-                _subscription.Dispose();
+                _subscription?.Dispose();
             }
             disposedValue = true;
         }

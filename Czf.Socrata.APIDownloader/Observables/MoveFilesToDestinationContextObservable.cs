@@ -103,6 +103,7 @@ public class MoveFilesToDestinationContextObservable : IObservable<MoveFilesToDe
         {
             observer.OnCompleted();
         }
+        _observers.Clear();
     }
     
 

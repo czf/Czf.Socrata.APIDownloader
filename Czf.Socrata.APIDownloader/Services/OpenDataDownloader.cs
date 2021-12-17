@@ -44,11 +44,12 @@ public class OpenDataDownloader : BackgroundService
         int queryLimitPerPage = GetQueryLimitPerPage(options.DataUri);
         int fileCount = 0;
         int pageCount = 0;
-        bool fileCreated;
+        bool createFile =false;
         string tempBaseFileName = Path.GetTempFileName();
         File.Delete(tempBaseFileName);
         long bytesWritten = 0;
-        string appToken = options.SocrataAppToken; 
+        string appToken = options.SocrataAppToken;
+        string fileName;
         if (String.IsNullOrEmpty(options.SocrataAppToken) || string.IsNullOrWhiteSpace(options.SocrataAppToken))
         {
             _logger.LogWarning("Application token not provided.  API throttling limits are higher when using an application token. https://dev.socrata.com/docs/app-tokens.html");
@@ -58,73 +59,90 @@ public class OpenDataDownloader : BackgroundService
             appToken = options.SocrataAppToken;
         }
 
-            FileStream dataFile = await FileStart(fileCount, tempBaseFileName, stoppingToken);
+        FileStream dataFile;
+        (dataFile, fileName) = await FileStart(fileCount, tempBaseFileName, stoppingToken);
         try
         {
-            do
+            if (!options.SkipDownload)
             {
-                fileCreated = false;
-                string paginatedQuery = options.DataUri.Query + (options.DataUri.Query.Length > 0 ? "&" : "?") + GetOffset(fileCount, pageCount, options.QueryPagesPerFile, queryLimitPerPage);
-                Uri paginatedUri = new(options.DataUri.GetLeftPart(UriPartial.Path) + paginatedQuery);
-                using HttpRequestMessage httpRequestMessage = new(
-                            HttpMethod.Get,
-                            paginatedUri);
+                do
+                {
+                    if (createFile)
+                    {
+                        (dataFile, fileName) = await FileStart(fileCount, tempBaseFileName, stoppingToken);
+                    }
+                    string paginatedQuery = options.DataUri.Query + (options.DataUri.Query.Length > 0 ? "&" : "?") + GetOffset(fileCount, pageCount, options.QueryPagesPerFile, queryLimitPerPage);
+                    Uri paginatedUri = new(options.DataUri.GetLeftPart(UriPartial.Path) + paginatedQuery);
+                    using HttpRequestMessage httpRequestMessage = new(
+                                HttpMethod.Get,
+                                paginatedUri);
 
-                if (!string.IsNullOrEmpty(appToken))
-                {
-                    httpRequestMessage.Headers.Add("X-App-Token", options.SocrataAppToken);
-                }
-                
-                HttpResponseMessage httpResponseMessage =
-                    await _httpClient.SendAsync(httpRequestMessage, stoppingToken);
-                if (!httpResponseMessage.IsSuccessStatusCode)
-                {
-                    _logger.LogError("unsuccessful response with uri: " + paginatedUri.ToString());
-                    _logger.LogError($"{httpResponseMessage.StatusCode}");
-                    _logger.LogError($"{httpResponseMessage.ReasonPhrase}");                    
+                    if (!string.IsNullOrEmpty(appToken))
+                    {
+                        httpRequestMessage.Headers.Add("X-App-Token", options.SocrataAppToken);
+                    }
 
-                    break;
-                }
+                    HttpResponseMessage httpResponseMessage =
+                        await _httpClient.SendAsync(httpRequestMessage, stoppingToken);
+                    if (!httpResponseMessage.IsSuccessStatusCode)
+                    {
+                        _logger.LogError("unsuccessful response with uri: " + paginatedUri.ToString());
+                        _logger.LogError($"{httpResponseMessage.StatusCode}");
+                        _logger.LogError($"{httpResponseMessage.ReasonPhrase}");
 
-                Stream contentStream = httpResponseMessage.Content.ReadAsStream(stoppingToken);
-                if (contentStream.Length > 3)
+                        break;
+                    }
+
+                    Stream contentStream = httpResponseMessage.Content.ReadAsStream(stoppingToken);
+                    if (contentStream.Length > 3)
+                    {
+                        await contentStream.CopyToAsync(dataFile, stoppingToken);
+
+                    }
+                    bytesWritten = contentStream.Length;
+                    pageCount++;
+                    if (pageCount >= options.QueryPagesPerFile)
+                    {
+                        Console.WriteLine($"Downloaded file number {fileCount + 1} with {options.QueryPagesPerFile} pages per file");
+                        await FileEnd(dataFile, stoppingToken);
+
+                        pageCount = 0;
+                        createFile = true;
+
+
+                        fileCount++;
+
+
+                    }
+                    else
+                    {
+                        createFile = false;
+                        await dataFile.WriteAsync(new byte[] { (byte)',' }, stoppingToken);
+                    }
+
+
+
+                } while ((bytesWritten > 3) && !stoppingToken.IsCancellationRequested);
+                if (bytesWritten <= 3)
                 {
-                    await contentStream.CopyToAsync(dataFile, stoppingToken);
-                    await dataFile.WriteAsync(new byte[] { (byte)',' }, stoppingToken);
+                    if (!createFile)
+                    {
+                        dataFile.Close();
+                    }
+                    File.Delete(fileName);
+                    Console.WriteLine($"Completed a total of {fileCount - 1} files with content");
                 }
-                bytesWritten = contentStream.Length;
-                pageCount++;
-                if (pageCount >= options.QueryPagesPerFile)
+                else
                 {
-                    Console.WriteLine($"Completed {fileCount+1} file(s) with {options.QueryPagesPerFile} pages per file");
+                    dataFile.Seek(-1, SeekOrigin.Current);
                     await FileEnd(dataFile, stoppingToken);
-
-                    pageCount = 0;
-                    fileCreated = true;
-                    
-                    
-                    fileCount++;
-                    dataFile = await FileStart(fileCount, tempBaseFileName, stoppingToken);
+                    Console.WriteLine($"Completed a total of {fileCount} files with content");
                 }
-
-
-
-            } while ((bytesWritten > 3) && !stoppingToken.IsCancellationRequested);
-            if (bytesWritten <= 3 && fileCreated)
-            {
-                File.Delete(GenerateTempFileName(fileCount, tempBaseFileName));
-                Console.WriteLine($"Completed a total of {fileCount+1} files");
+                string filename = Path.GetFileName(tempBaseFileName);
+                string path = tempBaseFileName.Replace(filename, string.Empty);
+                _moveFilesToDestinationContextObservable
+                    .MoveFilesToDestinationFromPattern(path, filename.Replace(".tmp", "_*_*.json"));
             }
-            else
-            {
-                dataFile.Seek(-1, SeekOrigin.Current);
-                await FileEnd(dataFile, stoppingToken);
-                Console.WriteLine($"Completed a total of {fileCount + 1} files");
-            }
-            string filename = Path.GetFileName(tempBaseFileName);
-            string path = tempBaseFileName.Replace(filename, string.Empty);
-            _moveFilesToDestinationContextObservable
-                .MoveFilesToDestinationFromPattern(path, filename.Replace(".tmp", "_*_*.json"));
         }
         catch(Exception ex)
         {
@@ -140,11 +158,12 @@ public class OpenDataDownloader : BackgroundService
         }
     }
 
-    private static async ValueTask<FileStream> FileStart(int fileCount, string tempBaseFileName, CancellationToken cancellationToken)
+    private static async ValueTask<FileStartRecord> FileStart(int fileCount, string tempBaseFileName, CancellationToken cancellationToken)
     {
-        FileStream dataFile = File.Create(GenerateTempFileName(fileCount, tempBaseFileName));
+        string fileName = GenerateTempFileName(fileCount, tempBaseFileName);
+        FileStream dataFile = File.Create(fileName);
         await dataFile.WriteAsync(new byte[] { (byte)'[' }, cancellationToken);
-        return dataFile;
+        return new FileStartRecord(dataFile, fileName);
     }
 
     private static async ValueTask FileEnd(FileStream dataFile, CancellationToken cancellationToken)
@@ -183,11 +202,14 @@ public class OpenDataDownloader : BackgroundService
         return $"$offset={offset}";
     }
 
+    private record class FileStartRecord(FileStream DataFile, string FileName);
 
     public class OpenDataDownloaderOptions
     {
         public Uri DataUri { get; set; }
         public string SocrataAppToken { get; set; }
         public int QueryPagesPerFile { get; set; } = 10;
+
+        public bool SkipDownload { get; set; } = false;
     }
 }
