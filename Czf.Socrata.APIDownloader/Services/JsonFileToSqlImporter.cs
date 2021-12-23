@@ -87,7 +87,7 @@ public class JsonFileToSqlImporter : IHostedService, IDisposable
             {
                 if (!_options.ImportToDatabaseEnabled) { return; }
                 _completeSemaphore.Wait();
-                Console.WriteLine("Import file");
+                Console.WriteLine($"Import file: {value.filePath}");
                 using SqlConnection sqlConnection = new SqlConnection(_options.ConnectionString);
                 sqlConnection.Open();
                 using SqlCommand sqlCommand = sqlConnection.CreateCommand();

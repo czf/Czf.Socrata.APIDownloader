@@ -4,29 +4,31 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using static Czf.Socrata.APIDownloader.Services.OpenDataDownloader;
 
 namespace Czf.Socrata.APIDownloader.Services;
-public class MoveFilesToDestination : IHostedService, IDisposable
+public class MoveFileToDestination : IHostedService, IDisposable
 {
-    private readonly IObservable<MoveFilesToDestinationContext> _observable;
+    private readonly IObservable<FileDownloadedContext> _observable;
     private readonly SQLImportObservable _sqlImportObservable;
     private readonly IHostApplicationLifetime _applicationLifetime;
-    private readonly IOptions<MoveFilesToDestinationOptions> _options;
-    private readonly ILogger<MoveFilesToDestination> _logger;
+    private readonly IOptions<MoveFileToDestinationOptions> _options;
+    private readonly ILogger<MoveFileToDestination> _logger;
     private bool disposedValue;
     private IDisposable _subscription;
 
-    public MoveFilesToDestination(
+    public MoveFileToDestination(
         IHostApplicationLifetime applicationLifetime,
-        IOptions<MoveFilesToDestinationOptions> options,
-        IObservable<MoveFilesToDestinationContext> observable,
-        ILogger<MoveFilesToDestination> logger,
+        IOptions<MoveFileToDestinationOptions> options,
+        IObservable<FileDownloadedContext> observable,
+        ILogger<MoveFileToDestination> logger,
         SQLImportObservable sqlImportObservable)
     {
         _applicationLifetime = applicationLifetime;
@@ -53,7 +55,7 @@ public class MoveFilesToDestination : IHostedService, IDisposable
         return Task.CompletedTask;
     }
 
-    public class MoveFilesToDestinationOptions
+    public class MoveFileToDestinationOptions
     {
         public string FileTargetDestination { get; set; } = ".";
         public string FileTargetBaseName { get; set; } = "result.json";
@@ -61,33 +63,48 @@ public class MoveFilesToDestination : IHostedService, IDisposable
         public bool SkipDownload { get; set; } = false;
 
     }
+    public class FileMovedContext
+    {
 
-    private class ContextObserver : IObserver<MoveFilesToDestinationContext>
+    }
+    private class ContextObserver : IObserver<FileDownloadedContext>//, IObservable<FileMovedContext>
     {
         private readonly IHostApplicationLifetime _applicationLifetime;
-        private readonly MoveFilesToDestinationOptions _options;
+        private readonly MoveFileToDestinationOptions _options;
         private readonly ILogger _logger;
         private readonly string _extension;
         private readonly SemaphoreSlim _completeSemaphore;
+        private readonly SemaphoreSlim _processEvent;
+        private bool _keepRunning;
+
         private readonly SQLImportObservable _sqlImportObservable;
+        private readonly ConcurrentQueue<FileDownloadedContext> _contextQueue;
+
         public ContextObserver(
-            MoveFilesToDestinationOptions options, 
+            MoveFileToDestinationOptions options, 
             ILogger logger, 
             IHostApplicationLifetime applicationLifetime,
             SQLImportObservable sqlImportObservable)
         {
+            _processEvent = new SemaphoreSlim(0);
+            _keepRunning = true;
+
             _applicationLifetime = applicationLifetime;
             _options = options;
             _logger = logger;
             _extension = Path.GetExtension(_options.FileTargetBaseName);
             _completeSemaphore = new(1);
             _sqlImportObservable = sqlImportObservable;
+            _contextQueue = new ConcurrentQueue<FileDownloadedContext>();
+            Task.Run(RunContextQueue);
         }
 
         public void OnCompleted()
         {
             _completeSemaphore.Wait();
             _completeSemaphore.Release();
+            _keepRunning = false;
+            _processEvent.Release();
             _logger.LogInformation("Completed: Move Files");
             Console.WriteLine("Completed: Move Files");
             
@@ -112,34 +129,46 @@ public class MoveFilesToDestination : IHostedService, IDisposable
             throw new NotImplementedException();
         }
 
-        public void OnNext(MoveFilesToDestinationContext context)
+        public void OnNext(FileDownloadedContext context)
         {
-            _completeSemaphore.Wait();
-            Console.WriteLine("Moving files");
-            var files = Directory.EnumerateFiles(context.sourcePath, context.fileNamePattern);
-            var currentIndex = 0;
-            var numOfFiles = files.Count();
-            var maxLeadingZeros = (int)Math.Log10(numOfFiles);
-            
-            
-            foreach (var file in files)
+            _contextQueue.Enqueue(context);
+            _processEvent.Release();
+        }
+
+        private void RunContextQueue()
+        {
+            while (_keepRunning)
             {
-                try
+                _processEvent.Wait();
+                _completeSemaphore.Wait();
+                while (!_contextQueue.IsEmpty)
                 {
-                    int leadingZeros = maxLeadingZeros - Math.Max((int)(Math.Log10(currentIndex)),0);
-                    var fileName = _options.FileTargetBaseName.Replace(_extension, $"_{"".PadLeft(leadingZeros, '0')}{currentIndex}{_extension}");
-                    File.Move(file, _options.FileTargetDestination + fileName);
-                    _logger.LogInformation("moved");
-                    _sqlImportObservable.ImportSqlFromJson(_options.FileTargetDestination + fileName);
-                    
+                    if(_contextQueue.TryPeek(out var context))
+                    {
+                        ProcessOnNext(context);
+                        _contextQueue.TryDequeue(out _);
+                    }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex,"unable to move");
-                }
-                currentIndex++;
+                _completeSemaphore.Release();
             }
-            _completeSemaphore.Release();
+        }
+
+        private void ProcessOnNext(FileDownloadedContext context)
+        {
+            Console.WriteLine($"Moving file: {context.FileName}");
+            
+            try
+            {
+                var fileName = _options.FileTargetBaseName.Replace(_extension, $"_{context.Offset}{_extension}");
+                File.Move(context.FileName, _options.FileTargetDestination + fileName);
+                _logger.LogInformation("moved");
+                _sqlImportObservable.ImportSqlFromJson(_options.FileTargetDestination + fileName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,"unable to move");
+            }            
+            
         }
     }
 

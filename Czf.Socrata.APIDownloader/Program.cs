@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 using System.Web;
 using Czf.Socrata.APIDownloader.Services;
 using OpenDataDownloaderOptions = Czf.Socrata.APIDownloader.Services.OpenDataDownloader.OpenDataDownloaderOptions;
-using MoveFilesToDestinationOptions = Czf.Socrata.APIDownloader.Services.MoveFilesToDestination.MoveFilesToDestinationOptions;
+using MoveFileToDestinationOptions = Czf.Socrata.APIDownloader.Services.MoveFileToDestination.MoveFileToDestinationOptions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -19,6 +19,7 @@ using Microsoft.Extensions.Options;
 using Czf.Socrata.APIDownloader.Observables;
 using Czf.Socrata.APIDownloader.Domain;
 using static Czf.Socrata.APIDownloader.Services.JsonFileToSqlImporter;
+using static Czf.Socrata.APIDownloader.Services.OpenDataDownloader;
 
 namespace SocrataAPIDownloader;
 
@@ -43,18 +44,20 @@ class Program
                 _ = services
                 .AddOptions()
                 .Configure<OpenDataDownloaderOptions>(config)
-                .Configure<MoveFilesToDestinationOptions>(config)
+                .Configure<MoveFileToDestinationOptions>(config)
                 .Configure<ImportJsonFromFileContextOptions>(config)
 
-                .AddHostedService<OpenDataDownloader>()
-                .AddHostedService<MoveFilesToDestination>()
+                .AddSingleton<OpenDataDownloader>()
+                .AddHostedService(x=>x.GetRequiredService<OpenDataDownloader>())
+                .AddHostedService<MoveFileToDestination>()
                 .AddHostedService<JsonFileToSqlImporter>()
 
                 .AddSingleton<MoveFilesToDestinationContextObservable>()
-                .AddSingleton<IObservable<MoveFilesToDestinationContext>, MoveFilesToDestinationContextObservable>(x =>
-                {
-                    return x.GetService<MoveFilesToDestinationContextObservable>();
-                })
+                .AddSingleton< IObservable<FileDownloadedContext>, OpenDataDownloader>(x=>x.GetRequiredService<OpenDataDownloader>())
+                //.AddSingleton<IObservable<MoveFilesToDestinationContext>, MoveFilesToDestinationContextObservable>(x =>
+                //{
+                //    return x.GetService<MoveFilesToDestinationContextObservable>();
+                //})
                 .AddSingleton<SQLImportObservable>()
                 .AddSingleton<IObservable<ImportJsonFromFileContext>, SQLImportObservable>(x =>
                 {
