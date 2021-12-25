@@ -4,7 +4,26 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net6.0</TargetFramework>
     <UserSecretsId>356604a3-216a-40f5-8ea5-171495fbca4c</UserSecretsId>
+    <Version>0.4-20211224</Version>
+    <Authors>czf</Authors>
+	<PackAsTool>true</PackAsTool>
+    <Company />
+    <Product>downsoda</Product>
+    <Description>A dotnet CLI tool for downloading from Socrata Open Data API.</Description>
+    <PackageProjectUrl>https://github.com/czf/Czf.Socrata.APIDownloader</PackageProjectUrl>
+    <PackageReadmeFile>readme.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/czf/Czf.Socrata.APIDownloader</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>open data; socrata; SODA API</PackageTags>
+	<ToolCommandName>downsoda</ToolCommandName>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\readme.md">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="4.0.0" />

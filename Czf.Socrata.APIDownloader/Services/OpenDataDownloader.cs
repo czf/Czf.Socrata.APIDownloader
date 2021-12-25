@@ -170,21 +170,34 @@ public class OpenDataDownloader : BackgroundService, IObservable<FileDownloadedC
 
     private async Task<HttpResponseMessage> FetchPage(Uri paginatedUri, HttpRequestMessage httpRequestMessage, CancellationToken stoppingToken)
     {
-        HttpResponseMessage httpResponseMessage;
+        bool retry = false;
+        HttpResponseMessage httpResponseMessage = null;
         do
         {
-            httpResponseMessage =
-                await _httpClient.SendAsync(httpRequestMessage, stoppingToken);
-            if (!httpResponseMessage.IsSuccessStatusCode)
+            retry = false;
+            try
             {
-                _logger.LogError("unsuccessful response with uri: " + paginatedUri.ToString());
-                _logger.LogError($"StatusCode: {httpResponseMessage.StatusCode}");
-                _logger.LogError($"ReasonPhrase: {httpResponseMessage.ReasonPhrase}");
-                _logger.LogError($"Content: {await httpRequestMessage.Content?.ReadAsStringAsync()}");
-                await Task.Delay(1000);
+                httpResponseMessage =
+                    await _httpClient.SendAsync(httpRequestMessage, stoppingToken);
+                if (!httpResponseMessage.IsSuccessStatusCode)
+                {
+                    retry = !httpResponseMessage.IsSuccessStatusCode;
+                    _logger.LogError("unsuccessful response with uri: " + paginatedUri.ToString());
+                    _logger.LogError($"StatusCode: {httpResponseMessage.StatusCode}");
+                    _logger.LogError($"ReasonPhrase: {httpResponseMessage.ReasonPhrase}");
+                    _logger.LogError($"Content: {await httpRequestMessage.Content?.ReadAsStringAsync()}");
+                    await Task.Delay(1000);
+                }
+            }
+            finally
+            {
+                if (retry) 
+                { 
+                    httpResponseMessage?.Dispose();
+                }
             }
 
-        } while (!httpResponseMessage.IsSuccessStatusCode);
+        } while (retry);
         return httpResponseMessage;
     }
 
