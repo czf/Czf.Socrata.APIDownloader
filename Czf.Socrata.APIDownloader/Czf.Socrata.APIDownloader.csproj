@@ -4,7 +4,7 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net6.0</TargetFramework>
     <UserSecretsId>356604a3-216a-40f5-8ea5-171495fbca4c</UserSecretsId>
-    <Version>0.4-20211224</Version>
+    <Version>0.4.0-help-20211224</Version>
     <Authors>czf</Authors>
 	<PackAsTool>true</PackAsTool>
     <Company />
